@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import { workspaceFileSavePlugin } from './vite.workspace-save-plugin'
 
 
 function figmaAssetResolver() {
@@ -23,6 +24,7 @@ export default defineConfig({
     include: ['leaflet'],
   },
   plugins: [
+    workspaceFileSavePlugin(),
     figmaAssetResolver(),
     // The React and Tailwind plugins are both required for Make, even if
     // Tailwind is not being actively used – do not remove them

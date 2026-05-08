@@ -21,7 +21,15 @@ import {
 } from 'lucide-react';
 import { DescribeCampaignPanel } from './describeCampaign/DescribeCampaignPanel';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { loadUploadManifest, type UploadManifestEntry } from '../../storage/uploadManifest';
+import { loadUploadManifest, saveUploadManifest, type UploadManifestEntry } from '../../storage/uploadManifest';
+import {
+  buildWorkspacePayload,
+  downloadWorkspacePayload,
+  fetchWorkspacePayload,
+  markBundledWorkspaceApplied,
+  postWorkspacePayloadToDevServer,
+  shouldApplyBundledWorkspace,
+} from '../../storage/workspaceFile';
 import { ImportCampaignWizard } from './import/ImportCampaignWizard';
 import { applyCampaignAutoStatus } from './campaignTimelineChips';
 import {
@@ -242,37 +250,6 @@ export const OrderBuilder = forwardRef<OrderBuilderHandle, OrderBuilderProps>(fu
   const [stickyNotes, setStickyNotes, stickyHydrated] = useLocalStorage<StickyNoteData[]>('adweb_sticky_notes', []);
   const storageReady = campaignsHydrated && stickyHydrated;
 
-  const didMigrateCalendarMode = useRef(false);
-  useEffect(() => {
-    if (!storageReady || didMigrateCalendarMode.current) return;
-    didMigrateCalendarMode.current = true;
-    setWorkspaceMode(w => ((w as unknown as string) === 'calendar' ? 'timeline' : w) as WorkspacePrimaryMode);
-  }, [storageReady, setWorkspaceMode]);
-
-  useEffect(() => {
-    if (surface !== 'all-campaigns') return;
-    setSelected(null);
-    if (workspaceMode !== 'list') setWorkspaceMode('list');
-  }, [surface, workspaceMode, setWorkspaceMode]);
-
-  const didMigrateTargeting = useRef(false);
-  useEffect(() => {
-    if (!storageReady || didMigrateTargeting.current) return;
-    didMigrateTargeting.current = true;
-    setCampaigns(prev => migrateOrderLineRequisitionNumbers(migrateCampaignsTargetingFromLegacy(prev)));
-  }, [storageReady, setCampaigns]);
-
-  /** Keep campaign/OL bars aligned to flight hulls whenever stored data drifts (e.g. legacy, import, partial updates). */
-  useEffect(() => {
-    if (!storageReady) return;
-    setCampaigns(prev => {
-      if (!prev.some(needsDateHarmonize)) return prev;
-      const next = prev.map(c => (needsDateHarmonize(c) ? harmonizeCampaignDates(c) : c));
-      if (next.every((c, i) => c === prev[i])) return prev;
-      return next;
-    });
-  }, [storageReady, campaigns, setCampaigns]);
-
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toast = useCallback((msg: string) => {
@@ -290,6 +267,96 @@ export const OrderBuilder = forwardRef<OrderBuilderHandle, OrderBuilderProps>(fu
   useEffect(() => {
     void loadUploadManifest().then(setUploadManifest);
   }, []);
+
+  /** After IndexedDB/localStorage hydrate, load `public/adweb-workspace.json` before running migrations so pulled repo data wins over stale browser storage. */
+  const [sharedWorkspaceReady, setSharedWorkspaceReady] = useState(false);
+  useEffect(() => {
+    if (!storageReady) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const payload = await fetchWorkspacePayload();
+        if (cancelled || !payload) return;
+        const apply = import.meta.env.DEV || shouldApplyBundledWorkspace(payload);
+        if (!apply) return;
+        setCampaigns(() => payload.campaigns);
+        setWorkspaceMode(payload.workspaceMode);
+        setTimelinePixelsPerDay(payload.timelinePixelsPerDay);
+        setStickyNotes(payload.stickyNotes);
+        void saveUploadManifest(payload.uploadManifest);
+        setUploadManifest(payload.uploadManifest);
+        if (import.meta.env.PROD) markBundledWorkspaceApplied(payload);
+      } finally {
+        if (!cancelled) setSharedWorkspaceReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [storageReady, setCampaigns, setWorkspaceMode, setTimelinePixelsPerDay, setStickyNotes]);
+
+  const persistenceReady = storageReady && sharedWorkspaceReady;
+
+  /** Debounced write back to `public/adweb-workspace.json` via the Vite dev server so edits are commit-ready. */
+  useEffect(() => {
+    if (!persistenceReady || !import.meta.env.DEV) return;
+    const t = window.setTimeout(() => {
+      const payload = buildWorkspacePayload({
+        campaigns,
+        workspaceMode,
+        timelinePixelsPerDay,
+        stickyNotes,
+        uploadManifest,
+        revision: Date.now(),
+      });
+      void postWorkspacePayloadToDevServer(payload);
+    }, 650);
+    return () => window.clearTimeout(t);
+  }, [persistenceReady, campaigns, workspaceMode, timelinePixelsPerDay, stickyNotes, uploadManifest]);
+
+  const handleExportWorkspaceJson = useCallback(() => {
+    const payload = buildWorkspacePayload({
+      campaigns,
+      workspaceMode,
+      timelinePixelsPerDay,
+      stickyNotes,
+      uploadManifest,
+      revision: Date.now(),
+    });
+    downloadWorkspacePayload(payload);
+    toast('Saved adweb-workspace.json — copy into public/ and commit to share with the team.');
+  }, [campaigns, workspaceMode, timelinePixelsPerDay, stickyNotes, uploadManifest, toast]);
+
+  const didMigrateCalendarMode = useRef(false);
+  useEffect(() => {
+    if (!persistenceReady || didMigrateCalendarMode.current) return;
+    didMigrateCalendarMode.current = true;
+    setWorkspaceMode(w => ((w as unknown as string) === 'calendar' ? 'timeline' : w) as WorkspacePrimaryMode);
+  }, [persistenceReady, setWorkspaceMode]);
+
+  useEffect(() => {
+    if (surface !== 'all-campaigns') return;
+    setSelected(null);
+    if (workspaceMode !== 'list') setWorkspaceMode('list');
+  }, [surface, workspaceMode, setWorkspaceMode]);
+
+  const didMigrateTargeting = useRef(false);
+  useEffect(() => {
+    if (!persistenceReady || didMigrateTargeting.current) return;
+    didMigrateTargeting.current = true;
+    setCampaigns(prev => migrateOrderLineRequisitionNumbers(migrateCampaignsTargetingFromLegacy(prev)));
+  }, [persistenceReady, setCampaigns]);
+
+  /** Keep campaign/OL bars aligned to flight hulls whenever stored data drifts (e.g. legacy, import, partial updates). */
+  useEffect(() => {
+    if (!persistenceReady) return;
+    setCampaigns(prev => {
+      if (!prev.some(needsDateHarmonize)) return prev;
+      const next = prev.map(c => (needsDateHarmonize(c) ? harmonizeCampaignDates(c) : c));
+      if (next.every((c, i) => c === prev[i])) return prev;
+      return next;
+    });
+  }, [persistenceReady, campaigns, setCampaigns]);
 
   /** Booked → Active at campaign start; Active → Booked before start; live → Completed after end. */
   useEffect(() => {
@@ -802,7 +869,7 @@ export const OrderBuilder = forwardRef<OrderBuilderHandle, OrderBuilderProps>(fu
       />
     );
 
-  if (!storageReady) {
+  if (!persistenceReady) {
     return (
       <div
         style={{
@@ -925,6 +992,7 @@ export const OrderBuilder = forwardRef<OrderBuilderHandle, OrderBuilderProps>(fu
             onModeChange={setWorkspaceMode}
             onAddStickyNote={handleAddStickyNote}
             showListToggle={surface === 'planner'}
+            onExportWorkspaceJson={handleExportWorkspaceJson}
           />
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             {workspaceMode === 'timeline' ? (

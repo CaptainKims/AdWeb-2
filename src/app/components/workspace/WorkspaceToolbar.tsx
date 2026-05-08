@@ -1,5 +1,5 @@
 import React from 'react';
-import { GanttChart, LayoutList, MessageSquare } from 'lucide-react';
+import { GanttChart, LayoutList, MessageSquare, FileDown } from 'lucide-react';
 import type { WorkspacePrimaryMode } from './workspaceTypes';
 import { WORKSPACE_ACTION_ACCENT, WORKSPACE_ACTION_ACCENT_FG } from './workspaceAccent';
 
@@ -10,9 +10,11 @@ interface WorkspaceToolbarProps {
   onModeChange: (m: WorkspacePrimaryMode) => void;
   onAddStickyNote: () => void;
   showListToggle: boolean;
+  /** Download current workspace as `adweb-workspace.json` for committing under `public/`. */
+  onExportWorkspaceJson?: () => void;
 }
 
-export function WorkspaceToolbar({ mode, onModeChange, onAddStickyNote, showListToggle }: WorkspaceToolbarProps) {
+export function WorkspaceToolbar({ mode, onModeChange, onAddStickyNote, showListToggle, onExportWorkspaceJson }: WorkspaceToolbarProps) {
   return (
     <div
       data-adweb-workspace-toolbar
@@ -58,6 +60,30 @@ export function WorkspaceToolbar({ mode, onModeChange, onAddStickyNote, showList
         </div>
       )}
       <div style={{ flex: 1 }} />
+      {onExportWorkspaceJson && (
+        <button
+          type="button"
+          onClick={onExportWorkspaceJson}
+          title="Download workspace JSON — save as public/adweb-workspace.json and commit"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 12px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border)',
+            backgroundColor: 'var(--secondary)',
+            fontFamily: 'var(--font-family-text)',
+            fontSize: 12,
+            fontWeight: 'var(--font-weight-semibold)',
+            color: 'var(--foreground)',
+            cursor: 'pointer',
+          }}
+        >
+          <FileDown size={16} />
+          Export JSON
+        </button>
+      )}
       <button
         type="button"
         onClick={onAddStickyNote}
